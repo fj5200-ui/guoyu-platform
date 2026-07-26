@@ -1,0 +1,112 @@
+name: Build signed Runtime Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_zip:
+        description: Source ZIP stored in repository root
+        required: true
+        default: guoyu-platform-source-v1.7.1.zip
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guoyu-runtime-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime:
+    name: Composer vendor and Vite build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract signed source baseline
+        shell: bash
+        env:
+          SOURCE_ZIP: ${{ inputs.source_zip }}
+        run: |
+          set -euo pipefail
+          test -f "$SOURCE_ZIP" || { echo "Missing repository file: $SOURCE_ZIP"; exit 1; }
+          mkdir -p source
+          unzip -q "$SOURCE_ZIP" -d source
+          test -f source/composer.json
+          test -f source/package.json
+          test -f source/VERSION
+          test "$(tr -d '\r\n ' < source/VERSION)" = "1.7.1"
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, intl, pdo_mysql, zip, gd, bcmath, openssl
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+
+      - name: Install Composer production runtime
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f composer.lock ]]; then
+            composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
+          else
+            composer update --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
+          fi
+          test -f vendor/autoload.php
+
+      - name: Compile React production build
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f package-lock.json ]]; then
+            npm ci --no-audit --no-fund
+          else
+            npm install --no-audit --no-fund
+          fi
+          npm run typecheck
+          npm run build
+          test -f public/build/manifest.json
+
+      - name: Verify signing private key
+        shell: bash
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY_B64: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY_B64 }}
+        run: |
+          set -euo pipefail
+          test -n "$UPDATE_SIGNING_PRIVATE_KEY_B64" || { echo 'Missing repository secret UPDATE_SIGNING_PRIVATE_KEY_B64'; exit 1; }
+          printf '%s' "$UPDATE_SIGNING_PRIVATE_KEY_B64" | base64 --decode > "$RUNNER_TEMP/update-private.pem"
+          chmod 600 "$RUNNER_TEMP/update-private.pem"
+          openssl pkey -in "$RUNNER_TEMP/update-private.pem" -pubout -out "$RUNNER_TEMP/update-public.pem"
+          expected=$(openssl pkey -pubin -in source/resources/keys/update-public.pem -outform DER | sha256sum | awk '{print $1}')
+          actual=$(openssl pkey -pubin -in "$RUNNER_TEMP/update-public.pem" -outform DER | sha256sum | awk '{print $1}')
+          test "$expected" = "$actual" || { echo 'Private key does not match source/resources/keys/update-public.pem'; exit 1; }
+
+      - name: Build signed Runtime Bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(tr -d '\r\n ' < source/VERSION)
+          python3 source/tools/build_runtime_bundle.py \
+            --root source \
+            --private-key "$RUNNER_TEMP/update-private.pem" \
+            --output "$RUNNER_TEMP/guoyu-runtime-v${version}.zip"
+          unzip -t "$RUNNER_TEMP/guoyu-runtime-v${version}.zip"
+          sha256sum -c "$RUNNER_TEMP/guoyu-runtime-v${version}.zip.sha256"
+          unzip -Z1 "$RUNNER_TEMP/guoyu-runtime-v${version}.zip" | grep -qx 'payload/guoyu-app/vendor/autoload.php'
+          unzip -Z1 "$RUNNER_TEMP/guoyu-runtime-v${version}.zip" | grep -qx 'payload/public_html/build/manifest.json'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guoyu-runtime-v1.7.1
+          path: |
+            ${{ runner.temp }}/guoyu-runtime-v1.7.1.zip
+            ${{ runner.temp }}/guoyu-runtime-v1.7.1.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
