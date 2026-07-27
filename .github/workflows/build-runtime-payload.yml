@@ -72,10 +72,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: ${{ runner.temp }}/source/package-lock.json
 
-      - name: Install frontend dependencies
+      - name: Install frontend dependencies and create lock file
         working-directory: ${{ runner.temp }}/source
         run: npm install --include=dev --no-audit --no-fund
 
