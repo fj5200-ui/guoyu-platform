@@ -1,0 +1,39 @@
+name: Export v1.8 Base Source
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat v18-source/part-[0-9][0-9] > "$RUNNER_TEMP/source.b64"
+          test "$(wc -c < "$RUNNER_TEMP/source.b64")" -eq 404972
+          base64 --decode "$RUNNER_TEMP/source.b64" > "$RUNNER_TEMP/source.tar.xz"
+          echo "89efc90eebb5a8496c0b79e02f5e9e4191a6bf7112a576e9e649c5046947b25a  $RUNNER_TEMP/source.tar.xz" | sha256sum -c -
+          xz -t "$RUNNER_TEMP/source.tar.xz"
+          mkdir -p "$RUNNER_TEMP/source"
+          tar -xJf "$RUNNER_TEMP/source.tar.xz" -C "$RUNNER_TEMP/source"
+          test "$(cat "$RUNNER_TEMP/source/VERSION")" = "1.8.0"
+          cd "$RUNNER_TEMP/source"
+          zip -qr "$GITHUB_WORKSPACE/guoyu-v1.8.0-base-source.zip" .
+          sha256sum "$GITHUB_WORKSPACE/guoyu-v1.8.0-base-source.zip" > "$GITHUB_WORKSPACE/guoyu-v1.8.0-base-source.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: guoyu-v1.8.0-base-source
+          path: |
+            guoyu-v1.8.0-base-source.zip
+            guoyu-v1.8.0-base-source.zip.sha256
+          if-no-files-found: error
+          retention-days: 7
