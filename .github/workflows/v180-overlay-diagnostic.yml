@@ -1,0 +1,52 @@
+name: Guoyu v1.8 Overlay Diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect and reconstruct final overlay
+        shell: bash
+        run: |
+          set +e
+          LOG="$GITHUB_WORKSPACE/v180-overlay-diagnostic.txt"
+          {
+            echo '== files =='
+            find v18-overlay5 -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+            echo '== count =='
+            find v18-overlay5 -maxdepth 1 -type f -name 'part-*' | wc -l
+            echo '== combined base64 =='
+            cat v18-overlay5/part-* > "$RUNNER_TEMP/overlay.b64"
+            wc -c "$RUNNER_TEMP/overlay.b64"
+            sha256sum "$RUNNER_TEMP/overlay.b64"
+            echo '== decode =='
+            base64 --decode "$RUNNER_TEMP/overlay.b64" > "$RUNNER_TEMP/overlay.tar.xz"
+            echo "base64_exit=$?"
+            ls -l "$RUNNER_TEMP/overlay.tar.xz"
+            sha256sum "$RUNNER_TEMP/overlay.tar.xz"
+            echo '== xz test =='
+            xz -tv "$RUNNER_TEMP/overlay.tar.xz"
+            echo "xz_exit=$?"
+            echo '== tar list =='
+            tar -tJf "$RUNNER_TEMP/overlay.tar.xz" | head -100
+            echo "tar_exit=${PIPESTATUS[0]}"
+          } 2>&1 | tee "$LOG"
+
+      - name: Upload overlay diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guoyu-v1.8.0-overlay-diagnostic
+          path: v180-overlay-diagnostic.txt
+          if-no-files-found: error
+          retention-days: 7
