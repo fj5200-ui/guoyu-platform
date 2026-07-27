@@ -77,6 +77,70 @@ jobs:
         working-directory: ${{ runner.temp }}/source
         run: npm install --include=dev --no-audit --no-fund
 
+      - name: Align Inertia 3 entrypoint types
+        working-directory: ${{ runner.temp }}/source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > resources/js/app.tsx <<'TSX'
+          import '../css/app.css';
+
+          import { createInertiaApp, type ResolvedComponent } from '@inertiajs/react';
+          import { createRoot } from 'react-dom/client';
+          import { Toaster } from 'sonner';
+
+          const pages = import.meta.glob<ResolvedComponent>('./pages/**/*.tsx');
+
+          createInertiaApp({
+            strictMode: true,
+            progress: {
+              color: 'var(--brand-primary)',
+            },
+            resolve: (name) => {
+              const resolvePage = pages[`./pages/${name}.tsx`];
+
+              if (!resolvePage) {
+                throw new Error(`Page not found: ${name}`);
+              }
+
+              return resolvePage();
+            },
+            setup({ el, App, props }) {
+              createRoot(el).render(
+                <>
+                  <App {...props} />
+                  <Toaster richColors position="top-center" />
+                </>,
+              );
+            },
+          });
+          TSX
+
+          cat > resources/js/ssr.tsx <<'TSX'
+          import { createInertiaApp, type ResolvedComponent } from '@inertiajs/react';
+          import createServer from '@inertiajs/react/server';
+          import ReactDOMServer from 'react-dom/server';
+
+          const pages = import.meta.glob<ResolvedComponent>('./pages/**/*.tsx');
+
+          createServer((page) =>
+            createInertiaApp({
+              page,
+              render: ReactDOMServer.renderToString,
+              resolve: (name) => {
+                const resolvePage = pages[`./pages/${name}.tsx`];
+
+                if (!resolvePage) {
+                  throw new Error(`Inertia page not found: ${name}`);
+                }
+
+                return resolvePage();
+              },
+              setup: ({ App, props }) => <App {...props} />,
+            }),
+          );
+          TSX
+
       - name: Typecheck frontend
         working-directory: ${{ runner.temp }}/source
         run: npm run typecheck
