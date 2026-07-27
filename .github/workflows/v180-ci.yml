@@ -1,30 +1,33 @@
-name: Guoyu v1.8.0 Module CI
+name: Guoyu v1.8.0 Final CI
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
   push:
     branches: [main]
     paths:
       - 'v18-source/**'
+      - 'v18-overlay5/**'
       - '.github/workflows/v180-ci.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: guoyu-v180-module-ci
+  group: guoyu-v180-final-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reassemble and verify v1.8 source
+      - name: Reassemble base source and apply final overlay
         shell: bash
         run: |
           set -euo pipefail
@@ -32,18 +35,26 @@ jobs:
           test "$(wc -c < "$RUNNER_TEMP/source.b64")" -eq 404972
           base64 --decode "$RUNNER_TEMP/source.b64" > "$RUNNER_TEMP/source.tar.xz"
           echo "89efc90eebb5a8496c0b79e02f5e9e4191a6bf7112a576e9e649c5046947b25a  $RUNNER_TEMP/source.tar.xz" | sha256sum -c -
+          xz -t "$RUNNER_TEMP/source.tar.xz"
           mkdir -p "$RUNNER_TEMP/source"
           tar -xJf "$RUNNER_TEMP/source.tar.xz" -C "$RUNNER_TEMP/source"
+
+          cat v18-overlay5/part-[0-9][0-9] > "$RUNNER_TEMP/overlay.b64"
+          base64 --decode "$RUNNER_TEMP/overlay.b64" > "$RUNNER_TEMP/overlay.tar.xz"
+          xz -t "$RUNNER_TEMP/overlay.tar.xz"
+          tar -xJf "$RUNNER_TEMP/overlay.tar.xz" -C "$RUNNER_TEMP/source"
+
           test -f "$RUNNER_TEMP/source/composer.json"
           test -f "$RUNNER_TEMP/source/package.json"
           test -f "$RUNNER_TEMP/source/mobile/package.json"
+          test -f "$RUNNER_TEMP/source/database/migrations/2026_07_27_000570_create_content_engagement_support_tables.php"
           test "$(cat "$RUNNER_TEMP/source/VERSION")" = "1.8.0"
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: mbstring, xml, dom, ctype, json, curl, openssl, zip, pdo, pdo_sqlite, sqlite3, fileinfo, tokenizer
+          extensions: mbstring, xml, dom, ctype, json, curl, openssl, zip, pdo, pdo_sqlite, sqlite3, fileinfo, tokenizer, gd, bcmath
           tools: composer:v2
           coverage: none
 
@@ -112,6 +123,10 @@ jobs:
         working-directory: ${{ runner.temp }}/source/mobile
         run: npm run typecheck
 
+      - name: Export Expo web
+        working-directory: ${{ runner.temp }}/source/mobile
+        run: npx expo export --platform web
+
       - name: Verify production outputs
         shell: bash
         run: |
@@ -122,6 +137,7 @@ jobs:
           test -f "$SOURCE/composer.lock"
           test -f "$SOURCE/package-lock.json"
           test -f "$SOURCE/mobile/package-lock.json"
+          test -d "$SOURCE/mobile/dist"
 
       - name: Package v1.8 runtime outputs
         shell: bash
@@ -147,4 +163,14 @@ jobs:
             guoyu-v1.8.0-runtime-unsigned.zip
             guoyu-v1.8.0-runtime-unsigned.zip.sha256
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guoyu-v1.8.0-failure-logs
+          path: |
+            ${{ runner.temp }}/source/storage/logs/*.log
+          if-no-files-found: ignore
           retention-days: 7

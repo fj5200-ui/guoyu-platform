@@ -1,0 +1,45 @@
+name: Export v1.8 Base Source
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reassemble source without early abort
+        shell: bash
+        run: |
+          set -u
+          mkdir -p "$RUNNER_TEMP/source"
+          cat v18-source/part-[0-9][0-9] > "$RUNNER_TEMP/source.b64"
+          wc -c "$RUNNER_TEMP/source.b64" | tee "$GITHUB_WORKSPACE/base-source-size.txt"
+          base64 --decode "$RUNNER_TEMP/source.b64" > "$RUNNER_TEMP/source.tar.xz"
+          sha256sum "$RUNNER_TEMP/source.tar.xz" | tee "$GITHUB_WORKSPACE/base-source-sha256.txt"
+          xz -t "$RUNNER_TEMP/source.tar.xz"
+          tar -xJf "$RUNNER_TEMP/source.tar.xz" -C "$RUNNER_TEMP/source"
+          find "$RUNNER_TEMP/source" -maxdepth 2 -type f | sort | head -100 > "$GITHUB_WORKSPACE/base-source-files.txt"
+          if [ -f "$RUNNER_TEMP/source/VERSION" ]; then cat "$RUNNER_TEMP/source/VERSION" > "$GITHUB_WORKSPACE/base-source-version.txt"; fi
+          cd "$RUNNER_TEMP/source"
+          zip -qr "$GITHUB_WORKSPACE/guoyu-v1.8.0-base-source.zip" .
+          sha256sum "$GITHUB_WORKSPACE/guoyu-v1.8.0-base-source.zip" > "$GITHUB_WORKSPACE/guoyu-v1.8.0-base-source.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: guoyu-v1.8.0-base-source
+          path: |
+            guoyu-v1.8.0-base-source.zip
+            guoyu-v1.8.0-base-source.zip.sha256
+            base-source-size.txt
+            base-source-sha256.txt
+            base-source-files.txt
+            base-source-version.txt
+          if-no-files-found: warn
+          retention-days: 7
