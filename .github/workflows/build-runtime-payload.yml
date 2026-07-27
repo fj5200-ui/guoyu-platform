@@ -24,13 +24,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Reassemble build source
+      - name: Reassemble and verify build source
         shell: bash
         run: |
           set -euo pipefail
           test -d build-source
           cat build-source/part-* > "$RUNNER_TEMP/source.b64"
+          test "$(wc -c < "$RUNNER_TEMP/source.b64")" -eq 120008
           base64 --decode "$RUNNER_TEMP/source.b64" > "$RUNNER_TEMP/source.tar.xz"
+          echo "49b5dbf6db5013203bf9364786f171b6fe3719ac5e07646fbdac367009712d44  $RUNNER_TEMP/source.tar.xz" | sha256sum -c -
           mkdir -p "$RUNNER_TEMP/source"
           tar -xJf "$RUNNER_TEMP/source.tar.xz" -C "$RUNNER_TEMP/source"
           test -f "$RUNNER_TEMP/source/composer.json"
