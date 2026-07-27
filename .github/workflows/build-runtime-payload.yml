@@ -8,12 +8,14 @@ on:
       - 'build-source/**'
       - 'ci/**'
       - '.github/workflows/build-runtime-payload.yml'
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: guoyu-runtime-v1.7.1
+  group: guoyu-runtime-v1.7.1-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
