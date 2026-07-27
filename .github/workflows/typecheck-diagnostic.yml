@@ -1,0 +1,150 @@
+name: Typecheck Diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guoyu-typecheck-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reassemble and verify build source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat build-source/part-* > "$RUNNER_TEMP/source.b64"
+          test "$(wc -c < "$RUNNER_TEMP/source.b64")" -eq 120008
+          base64 --decode "$RUNNER_TEMP/source.b64" > "$RUNNER_TEMP/source.tar.xz"
+          echo "49b5dbf6db5013203bf9364786f171b6fe3719ac5e07646fbdac367009712d44  $RUNNER_TEMP/source.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/source"
+          tar -xJf "$RUNNER_TEMP/source.tar.xz" -C "$RUNNER_TEMP/source"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        working-directory: ${{ runner.temp }}/source
+        run: npm install --include=dev --no-audit --no-fund
+
+      - name: Apply current Inertia 3 compatibility patches
+        working-directory: ${{ runner.temp }}/source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > resources/js/app.tsx <<'TSX'
+          import '../css/app.css';
+
+          import { createInertiaApp, type ResolvedComponent } from '@inertiajs/react';
+          import { createRoot } from 'react-dom/client';
+          import { Toaster } from 'sonner';
+
+          const pages = import.meta.glob<ResolvedComponent>('./pages/**/*.tsx');
+
+          createInertiaApp({
+            strictMode: true,
+            progress: { color: 'var(--brand-primary)' },
+            resolve: (name) => {
+              const resolvePage = pages[`./pages/${name}.tsx`];
+              if (!resolvePage) throw new Error(`Page not found: ${name}`);
+              return resolvePage();
+            },
+            setup({ el, App, props }) {
+              if (!el) throw new Error('Inertia root element was not found.');
+              createRoot(el).render(
+                <>
+                  <App {...props} />
+                  <Toaster richColors position="top-center" />
+                </>,
+              );
+            },
+          });
+          TSX
+
+          cat > resources/js/ssr.tsx <<'TSX'
+          import { createInertiaApp, type ResolvedComponent } from '@inertiajs/react';
+          import createServer from '@inertiajs/react/server';
+          import ReactDOMServer from 'react-dom/server';
+
+          const pages = import.meta.glob<ResolvedComponent>('./pages/**/*.tsx');
+
+          createServer((page) =>
+            createInertiaApp({
+              page,
+              render: ReactDOMServer.renderToString,
+              resolve: (name) => {
+                const resolvePage = pages[`./pages/${name}.tsx`];
+                if (!resolvePage) throw new Error(`Inertia page not found: ${name}`);
+                return resolvePage();
+              },
+              setup: ({ App, props }) => <App {...props} />,
+            }),
+          );
+          TSX
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          navigation = Path('resources/js/pages/Admin/Navigation/Index.tsx')
+          text = navigation.read_text()
+          text = text.replace(
+              "type NavRow = NavigationItem & { sort_order: number; is_active: boolean };",
+              "type VisibilityValue = string | number | boolean | null;\n"
+              "type NavRow = Omit<NavigationItem, 'children' | 'visibility'> & {\n"
+              "  sort_order: number;\n"
+              "  is_active: boolean;\n"
+              "  visibility: Record<string, VisibilityValue>;\n"
+              "};",
+          )
+          text = text.replace(
+              "visibility: item.visibility ?? {},",
+              "visibility: (item.visibility ?? {}) as Record<string, VisibilityValue>,",
+          )
+          navigation.write_text(text)
+
+          seller = Path('resources/js/pages/Admin/Sellers/Edit.tsx')
+          text = seller.read_text().replace(
+              'metadata: Record<string, unknown>;',
+              'metadata: Record<string, string | number | boolean | null>;',
+          )
+          seller.write_text(text)
+          PY
+
+      - name: Run TypeScript and save complete report
+        id: typecheck
+        continue-on-error: true
+        working-directory: ${{ runner.temp }}/source
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck -- --pretty false 2>&1 | tee "$GITHUB_WORKSPACE/typecheck.log"
+
+      - name: Upload complete TypeScript report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guoyu-typecheck-diagnostic
+          path: typecheck.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Print complete TypeScript report
+        if: always()
+        run: cat typecheck.log
+
+      - name: Fail when TypeScript has errors
+        if: steps.typecheck.outcome == 'failure'
+        run: exit 1
