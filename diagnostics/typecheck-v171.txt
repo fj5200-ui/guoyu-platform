@@ -1,0 +1,1 @@
+Trigger PR-only TypeScript diagnostic workflow for v1.7.1.
