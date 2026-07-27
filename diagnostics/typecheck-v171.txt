@@ -1,2 +1,3 @@
 Trigger PR-only TypeScript diagnostic workflow for v1.7.1.
 Retry after complete Inertia 3 compatibility migration.
+Trigger full PR runtime build after clean typecheck.
