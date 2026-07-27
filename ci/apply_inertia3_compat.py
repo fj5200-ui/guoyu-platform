@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Apply strict Inertia 3 / React 19 compatibility fixes to the extracted v1.7.1 source.
+"""Apply strict Inertia 3 / React 19 compatibility fixes to v1.7.1 sources.
 
-The runtime builder intentionally keeps the original signed source archive immutable.
-This script applies deterministic, validated source migrations before typecheck/build.
+The release source archive stays immutable. This migration is deterministic and
+fails loudly when the expected source no longer matches, preventing silent drift.
 """
 
 from pathlib import Path
@@ -19,15 +19,96 @@ def replace_exact(path: str, old: str, new: str, expected: int = 1) -> None:
     file.write_text(text.replace(old, new), encoding="utf-8")
 
 
-# Seller metadata comes from a broad API type, while the submitted form must contain
-# only FormData-convertible scalar values.
+def write_exact(path: str, content: str) -> None:
+    Path(path).write_text(content, encoding="utf-8")
+
+
+write_exact(
+    "resources/js/app.tsx",
+    """import '../css/app.css';
+
+import { createInertiaApp, type ResolvedComponent } from '@inertiajs/react';
+import { createRoot } from 'react-dom/client';
+import { Toaster } from 'sonner';
+
+const pages = import.meta.glob<ResolvedComponent>('./pages/**/*.tsx');
+
+createInertiaApp({
+  strictMode: true,
+  progress: { color: 'var(--brand-primary)' },
+  resolve: (name) => {
+    const resolvePage = pages[`./pages/${name}.tsx`];
+    if (!resolvePage) throw new Error(`Page not found: ${name}`);
+    return resolvePage();
+  },
+  setup({ el, App, props }) {
+    if (!el) throw new Error('Inertia root element was not found.');
+    createRoot(el).render(
+      <>
+        <App {...props} />
+        <Toaster richColors position=\"top-center\" />
+      </>,
+    );
+  },
+});
+""",
+)
+
+write_exact(
+    "resources/js/ssr.tsx",
+    """import { createInertiaApp, type ResolvedComponent } from '@inertiajs/react';
+import createServer from '@inertiajs/react/server';
+import ReactDOMServer from 'react-dom/server';
+
+const pages = import.meta.glob<ResolvedComponent>('./pages/**/*.tsx');
+
+createServer((page) =>
+  createInertiaApp({
+    page,
+    render: ReactDOMServer.renderToString,
+    resolve: (name) => {
+      const resolvePage = pages[`./pages/${name}.tsx`];
+      if (!resolvePage) throw new Error(`Inertia page not found: ${name}`);
+      return resolvePage();
+    },
+    setup: ({ App, props }) => <App {...props} />,
+  }),
+);
+""",
+)
+
+# Navigation form: remove recursively nested children and ensure all submitted
+# visibility values are FormData-convertible scalars.
+replace_exact(
+    "resources/js/pages/Admin/Navigation/Index.tsx",
+    "type NavRow = NavigationItem & { sort_order: number; is_active: boolean };",
+    "type VisibilityValue = string | number | boolean | null;\n"
+    "type NavRow = Omit<NavigationItem, 'children' | 'visibility'> & {\n"
+    "  sort_order: number;\n"
+    "  is_active: boolean;\n"
+    "  visibility: Record<string, VisibilityValue>;\n"
+    "};",
+)
+replace_exact(
+    "resources/js/pages/Admin/Navigation/Index.tsx",
+    "visibility: item.visibility ?? {},",
+    "visibility: (item.visibility ?? {}) as Record<string, VisibilityValue>,",
+)
+
+# Seller metadata comes from a broad API type, while the submitted form must
+# contain only FormData-convertible scalar values.
+replace_exact(
+    "resources/js/pages/Admin/Sellers/Edit.tsx",
+    "metadata: Record<string, unknown>;",
+    "metadata: Record<string, string | number | boolean | null>;",
+)
 replace_exact(
     "resources/js/pages/Admin/Sellers/Edit.tsx",
     "metadata: seller?.metadata ?? {},",
     "metadata: (seller?.metadata ?? {}) as SellerForm['metadata'],",
 )
 
-# HTML select values are strings; these two form fields are numeric IDs.
+# HTML select values are strings; these form fields are numeric IDs.
 replace_exact(
     "resources/js/pages/Collaboration/Dashboard.tsx",
     "form.setData('owner_id',e.target.value)",
